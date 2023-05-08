@@ -1,17 +1,20 @@
 import { User } from "../entities/User";
-import { Resolver, Mutation, Arg } from "type-graphql";
+import { Resolver, Mutation, Arg, Ctx } from "type-graphql";
 import argon2 from "argon2";
 import { UserMutationResponse } from "../types/UserMutationResponse";
 import { RegisterInput } from "../types/RegisterInput";
 import { validateRegisterInput } from "../utils/validaterRegisterInput";
 import { LoginInput } from "../types/LoginInput";
-
-
+import { Context } from "src/types/Context";
+import { COOKIE_NAME } from "../constants";
+require("dotenv").config();
 @Resolver()
 export class UserResolver {
   @Mutation((_return) => UserMutationResponse, { nullable: true })
-  async register(@Arg("registerInput") registerInput: RegisterInput): Promise<UserMutationResponse> {
-    
+  async register(
+    @Arg("registerInput") registerInput: RegisterInput,
+    @Ctx() { req }: Context
+  ): Promise<UserMutationResponse> {
     const validateRegisterInputErrors = validateRegisterInput(registerInput);
 
     if (validateRegisterInputErrors !== null)
@@ -42,11 +45,15 @@ export class UserResolver {
         email,
       });
 
+      await newUser.save();
+
+      req.session.userId = newUser.id;
+
       return {
         code: 200,
         success: true,
         message: "User registration successful",
-        user: await User.save(newUser),
+        user: newUser,
       };
     } catch (error) {
       console.log(error);
@@ -61,6 +68,7 @@ export class UserResolver {
   @Mutation((_return) => UserMutationResponse)
   async login(
     @Arg("loginInput") { usernameOrEmail, password }: LoginInput,
+    @Ctx() { req }: Context
   ): Promise<UserMutationResponse> {
     try {
       const existingUser = await User.findOneBy(
@@ -77,7 +85,7 @@ export class UserResolver {
           errors: [
             {
               field: "usernameOrEmail",
-              message: "Username of email incorrect",
+              message: "Username or email incorrect",
             },
           ],
         };
@@ -92,13 +100,16 @@ export class UserResolver {
           code: 400,
           success: false,
           message: "Wrong password",
-          errors: [{ field: "password", message: "wrong password" }],
+          errors: [{ field: "password", message: "Wrong password" }],
         };
+
+      // Create session and return cookie
+      req.session.userId = existingUser.id;
 
       return {
         code: 200,
         success: true,
-        message: "login succesfully",
+        message: "Logged in successfully",
         user: existingUser,
       };
     } catch (error) {
@@ -109,5 +120,20 @@ export class UserResolver {
         message: `Internal server error ${error.message}`,
       };
     }
+  }
+
+  @Mutation((_return) => Boolean)
+  logout(@Ctx() { req, res }: Context): Promise<boolean> {
+    return new Promise<boolean>((resolve, _reject) => {
+      res.clearCookie(COOKIE_NAME);
+
+      req.session.destroy((error) => {
+        if (error) {
+          console.log("DESTROYING SESSION ERROR", error);
+          resolve(false);
+        }
+        resolve(true);
+      });
+    });
   }
 }
